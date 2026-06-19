@@ -12,6 +12,7 @@ data class Receipt(
     val status: ReceiptStatus,
     val blocks: List<ReceiptBlock>,
     val warnings: List<ParseWarning> = emptyList(),
+    val rawBytes: ByteArray = byteArrayOf(),
 )
 
 enum class ReceiptStatus {

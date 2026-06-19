@@ -10,6 +10,17 @@ sealed interface ReceiptBlock {
         val label: String,
         val payload: String? = null,
     ) : ReceiptBlock
+
+    data class RasterImage(
+        val widthBytes: Int,
+        val heightDots: Int,
+        val data: ByteArray,
+        val align: TextAlign,
+        val widthScale: Int = 1,
+        val heightScale: Int = 1,
+    ) : ReceiptBlock {
+        val widthDots: Int = widthBytes * 8
+    }
 }
 
 data class TextSegment(

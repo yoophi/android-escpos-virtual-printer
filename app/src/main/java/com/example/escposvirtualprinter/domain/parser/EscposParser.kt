@@ -141,6 +141,7 @@ class EscposParser(
                 events += EscposEvent.Cut
                 true
             }
+            0x76 -> parseRasterImage(events)
             else -> {
                 consume(2)
                 flushText(events)
@@ -148,6 +149,42 @@ class EscposParser(
                 true
             }
         }
+    }
+
+    private fun parseRasterImage(events: MutableList<EscposEvent>): Boolean {
+        if (pending.size < 8) return false
+        val marker = pending.elementAt(2)
+        if (marker != 0x30) {
+            consume(2)
+            flushText(events)
+            events += EscposEvent.UnknownCommand(listOf(GS, 0x76), offset)
+            return true
+        }
+
+        val mode = pending.elementAt(3)
+        val widthBytes = pending.elementAt(4) + pending.elementAt(5) * 256
+        val heightDots = pending.elementAt(6) + pending.elementAt(7) * 256
+        val dataSize = widthBytes * heightDots
+        if (mode !in RASTER_IMAGE_MODES || widthBytes <= 0 || heightDots <= 0 || dataSize > MAX_RASTER_IMAGE_BYTES) {
+            consume(8)
+            flushText(events)
+            events += EscposEvent.UnknownCommand(listOf(GS, 0x76, marker, mode), offset)
+            return true
+        }
+        if (pending.size < 8 + dataSize) return false
+
+        val data = ByteArray(dataSize) { index -> pending.elementAt(8 + index).toByte() }
+        consume(8 + dataSize)
+        flushText(events)
+        events += EscposEvent.RasterImage(
+            widthBytes = widthBytes,
+            heightDots = heightDots,
+            data = data,
+            align = align,
+            widthScale = if (mode == 1 || mode == 49 || mode == 3 || mode == 51) 2 else 1,
+            heightScale = if (mode == 2 || mode == 50 || mode == 3 || mode == 51) 2 else 1,
+        )
+        return true
     }
 
     private fun parseDle(events: MutableList<EscposEvent>): Boolean {
@@ -186,5 +223,7 @@ class EscposParser(
         const val ESC = 0x1b
         const val GS = 0x1d
         const val DLE = 0x10
+        const val MAX_RASTER_IMAGE_BYTES = 1_048_576
+        val RASTER_IMAGE_MODES = setOf(0, 1, 2, 3, 48, 49, 50, 51)
     }
 }

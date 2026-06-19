@@ -9,6 +9,7 @@ import com.example.escposvirtualprinter.domain.model.TextSegment
 import com.example.escposvirtualprinter.domain.model.TextStyle
 import java.time.Instant
 import java.util.UUID
+import java.io.ByteArrayOutputStream
 
 class ReceiptBuilder(
     private val sourceHost: String?,
@@ -19,12 +20,20 @@ class ReceiptBuilder(
     private val blocks = mutableListOf<ReceiptBlock>()
     private val lineSegments = mutableListOf<TextSegment>()
     private val warnings = mutableListOf<ParseWarning>()
+    private val rawBytes = ByteArrayOutputStream()
     private var currentAlign = TextAlign.Left
     private var currentStyle = TextStyle()
     private var byteCount = 0L
 
     fun addBytes(count: Int) {
         byteCount += count
+    }
+
+    fun addRawBytes(bytes: ByteArray, length: Int) {
+        val allowed = (MAX_DEBUG_RAW_BYTES - rawBytes.size()).coerceAtLeast(0)
+        if (allowed > 0) {
+            rawBytes.write(bytes, 0, length.coerceAtMost(allowed))
+        }
     }
 
     fun apply(event: EscposEvent): Boolean {
@@ -43,6 +52,17 @@ class ReceiptBuilder(
                 currentStyle = TextStyle()
             }
             is EscposEvent.FeedLines -> repeat(event.count.coerceAtMost(20)) { commitLine(force = true) }
+            is EscposEvent.RasterImage -> {
+                commitLine()
+                blocks += ReceiptBlock.RasterImage(
+                    widthBytes = event.widthBytes,
+                    heightDots = event.heightDots,
+                    data = event.data,
+                    align = event.align,
+                    widthScale = event.widthScale,
+                    heightScale = event.heightScale,
+                )
+            }
             is EscposEvent.StatusRequest -> {
                 blocks += ReceiptBlock.DeviceEvent("Status request", "DLE EOT ${event.value}")
             }
@@ -69,6 +89,7 @@ class ReceiptBuilder(
             status = status,
             blocks = blocks + listOfNotNull(pendingLineBlockOrNull()),
             warnings = warnings,
+            rawBytes = rawBytes.toByteArray(),
         )
     }
 
@@ -89,5 +110,9 @@ class ReceiptBuilder(
     private fun pendingLineBlockOrNull(): ReceiptBlock.TextLine? {
         if (lineSegments.isEmpty()) return null
         return ReceiptBlock.TextLine(lineSegments.toList(), currentAlign)
+    }
+
+    private companion object {
+        const val MAX_DEBUG_RAW_BYTES = 256 * 1024
     }
 }

@@ -24,7 +24,7 @@ import kotlinx.coroutines.withContext
 
 class TcpEscposPrinterServer(
     private val scope: CoroutineScope,
-    private val charset: Charset = Charsets.UTF_8,
+    private val charset: Charset = Charset.forName("EUC-KR"),
 ) : PrinterServerPort {
     private val mutableStatus = MutableStateFlow(PrinterServerPortStatus())
     private val mutableEvents = MutableSharedFlow<PrinterServerEvent>(extraBufferCapacity = 64)
@@ -116,6 +116,7 @@ class TcpEscposPrinterServer(
                 hasData = true
                 lastDataAt = System.currentTimeMillis()
                 builder.addBytes(read)
+                builder.addRawBytes(buffer, read)
 
                 val events = parser.feed(buffer.copyOf(read))
                 var completedByCut = false

@@ -11,6 +11,14 @@ sealed interface EscposEvent {
     data object Initialize : EscposEvent
     data object Cut : EscposEvent
     data class FeedLines(val count: Int) : EscposEvent
+    data class RasterImage(
+        val widthBytes: Int,
+        val heightDots: Int,
+        val data: ByteArray,
+        val align: TextAlign,
+        val widthScale: Int,
+        val heightScale: Int,
+    ) : EscposEvent
     data class StatusRequest(val value: Int) : EscposEvent
     data class UnknownCommand(val bytes: List<Int>, val offset: Long) : EscposEvent
 }

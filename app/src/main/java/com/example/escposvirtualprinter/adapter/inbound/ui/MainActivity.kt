@@ -2,28 +2,36 @@ package com.example.escposvirtualprinter.adapter.inbound.ui
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.graphics.Paint
+import android.graphics.Typeface
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -38,18 +46,21 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -60,6 +71,7 @@ import com.example.escposvirtualprinter.application.port.inbound.PrinterServerSt
 import com.example.escposvirtualprinter.domain.model.Receipt
 import com.example.escposvirtualprinter.domain.model.ReceiptBlock
 import com.example.escposvirtualprinter.domain.model.ReceiptStatus
+import com.example.escposvirtualprinter.domain.model.TextStyle
 import java.net.NetworkInterface
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -82,7 +94,12 @@ private fun VirtualPrinterApp() {
     val context = LocalContext.current
     val state by AppGraph.printerUseCase.state.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
+    val preferences = remember { context.getSharedPreferences("printer_settings", android.content.Context.MODE_PRIVATE) }
     var portText by remember { mutableStateOf(state.port.toString()) }
+    var currentScreen by rememberSaveable { mutableStateOf(AppScreen.Main) }
+    var charsPerLine by rememberSaveable {
+        mutableIntStateOf(preferences.getInt("chars_per_line", 42).takeIf { it == 21 || it == 42 } ?: 42)
+    }
     val tcpAddresses = remember(state.port, state.running) { discoverTcpAddresses(state.port) }
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -96,6 +113,10 @@ private fun VirtualPrinterApp() {
         }
     }
 
+    LaunchedEffect(charsPerLine) {
+        preferences.edit().putInt("chars_per_line", charsPerLine).apply()
+    }
+
     Surface(
         modifier = Modifier.fillMaxSize(),
         color = Color(0xFFF7F4ED),
@@ -103,37 +124,53 @@ private fun VirtualPrinterApp() {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Text(
-                text = "ESC/POS Virtual Printer",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Black,
-                color = Color(0xFF1E2526),
-            )
-            ServerPanel(
-                state = state,
-                tcpAddresses = tcpAddresses,
-                portText = portText,
-                onPortChange = { portText = it.filter(Char::isDigit).take(5) },
-                onStart = {
-                    val port = portText.toIntOrNull()?.coerceIn(1, 65535) ?: 9100
-                    ContextCompat.startForegroundService(context, PrinterForegroundService.startIntent(context, port))
-                },
-                onStop = {
-                    context.startService(PrinterForegroundService.stopIntent(context))
-                },
-                onClear = {
-                    scope.launchClearReceipts()
-                },
-            )
-            ReceiptList(
-                receipts = state.receipts,
-                modifier = Modifier.weight(1f),
-            )
+            when (currentScreen) {
+                AppScreen.Main -> {
+                    ServerPanel(
+                        state = state,
+                        tcpAddresses = tcpAddresses,
+                        portText = portText,
+                        charsPerLine = charsPerLine,
+                        onPortChange = { portText = it.filter(Char::isDigit).take(5) },
+                        onStart = {
+                            val port = portText.toIntOrNull()?.coerceIn(1, 65535) ?: 9100
+                            ContextCompat.startForegroundService(context, PrinterForegroundService.startIntent(context, port))
+                        },
+                        onStop = {
+                            context.startService(PrinterForegroundService.stopIntent(context))
+                        },
+                        onClear = {
+                            scope.launchClearReceipts()
+                        },
+                        onOpenSettings = {
+                            currentScreen = AppScreen.Settings
+                        },
+                    )
+                    ReceiptList(
+                        receipts = state.receipts,
+                        charsPerLine = charsPerLine,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                AppScreen.Settings -> {
+                    SettingsScreen(
+                        charsPerLine = charsPerLine,
+                        onCharsPerLineChange = { charsPerLine = it },
+                        onBack = { currentScreen = AppScreen.Main },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
         }
     }
+}
+
+private enum class AppScreen {
+    Main,
+    Settings,
 }
 
 private fun kotlinx.coroutines.CoroutineScope.launchClearReceipts() {
@@ -166,10 +203,12 @@ private fun ServerPanel(
     state: PrinterServerState,
     tcpAddresses: List<String>,
     portText: String,
+    charsPerLine: Int,
     onPortChange: (String) -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit,
     onClear: () -> Unit,
+    onOpenSettings: () -> Unit,
 ) {
     Card(
         colors = CardDefaults.cardColors(containerColor = Color(0xFFFFFDF7)),
@@ -177,70 +216,69 @@ private fun ServerPanel(
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
         modifier = Modifier.border(1.dp, Color(0xFFD6D0C3), RoundedCornerShape(8.dp)),
     ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+        FlowRow(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            itemVerticalAlignment = Alignment.CenterVertically,
         ) {
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Column {
-                    Text(
-                        text = if (state.running) "Listening" else "Stopped",
-                        fontWeight = FontWeight.Bold,
-                        color = if (state.running) Color(0xFF1F7A5A) else Color(0xFFA33D2F),
-                    )
-                    Text(
-                        text = "Port ${state.port} · clients ${state.clientCount}",
-                        color = Color(0xFF697070),
-                        fontSize = 13.sp,
-                    )
-                }
                 Text(
-                    text = "${state.receipts.size} receipts",
-                    color = Color(0xFF245F8F),
-                    fontWeight = FontWeight.SemiBold,
+                    text = "ESC/POS",
+                    fontWeight = FontWeight.Black,
+                    fontSize = 20.sp,
+                    color = Color(0xFF1E2526),
+                )
+                Text(
+                    text = if (state.running) "ON" else "OFF",
+                    color = if (state.running) Color.White else Color(0xFFA33D2F),
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 12.sp,
+                    modifier = Modifier
+                        .background(
+                            if (state.running) Color(0xFF1F7A5A) else Color(0xFFFFFDF7),
+                            RoundedCornerShape(4.dp),
+                        )
+                        .border(1.dp, if (state.running) Color(0xFF1F7A5A) else Color(0xFFA33D2F), RoundedCornerShape(4.dp))
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
                 )
             }
 
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(Color(0xFFEFE8D9), RoundedCornerShape(6.dp))
-                    .border(1.dp, Color(0xFFD6D0C3), RoundedCornerShape(6.dp))
-                    .padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                Text(
-                    text = "TCP connection",
-                    color = Color(0xFF1E2526),
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 13.sp,
-                )
-                if (tcpAddresses.isEmpty()) {
-                    Text(
-                        text = "No external IPv4 address found · port ${state.port}",
-                        color = Color(0xFF697070),
-                        fontSize = 13.sp,
-                        fontFamily = FontFamily.Monospace,
-                    )
-                } else {
-                    tcpAddresses.forEach { endpoint ->
-                        Text(
-                            text = endpoint,
-                            color = if (state.running) Color(0xFF1F7A5A) else Color(0xFF697070),
-                            fontSize = 15.sp,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                    }
-                }
-            }
+            Text(
+                text = tcpAddresses.firstOrNull() ?: "tcp://no-ip:${state.port}",
+                color = if (state.running) Color(0xFF1F7A5A) else Color(0xFF697070),
+                fontSize = 14.sp,
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                fontWeight = FontWeight.SemiBold,
+            )
+
+            Text(
+                text = "clients ${state.clientCount}",
+                color = Color(0xFF697070),
+                fontSize = 13.sp,
+            )
+
+            Text(
+                text = "${state.receipts.size} receipts",
+                color = Color(0xFF245F8F),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+
+            Text(
+                text = "$charsPerLine chars/line",
+                color = Color(0xFF697070),
+                fontSize = 13.sp,
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+            )
 
             Row(
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 OutlinedTextField(
@@ -250,7 +288,7 @@ private fun ServerPanel(
                     singleLine = true,
                     enabled = !state.running,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    modifier = Modifier.width(132.dp),
+                    modifier = Modifier.width(104.dp),
                 )
                 if (state.running) {
                     OutlinedButton(onClick = onStop) { Text("Stop") }
@@ -258,18 +296,20 @@ private fun ServerPanel(
                     Button(onClick = onStart) { Text("Start") }
                 }
                 OutlinedButton(onClick = onClear) { Text("Clear") }
+                OutlinedButton(onClick = onOpenSettings) { Text("Settings") }
             }
 
             state.lastError?.let {
-                Text(text = it, color = Color(0xFFA33D2F), fontSize = 13.sp)
+                    Text(text = it, color = Color(0xFFA33D2F), fontSize = 13.sp)
+                }
             }
-        }
     }
 }
 
 @Composable
 private fun ReceiptList(
     receipts: List<Receipt>,
+    charsPerLine: Int,
     modifier: Modifier = Modifier,
 ) {
     if (receipts.isEmpty()) {
@@ -290,112 +330,528 @@ private fun ReceiptList(
         return
     }
 
-    LazyColumn(
+    LazyRow(
         modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         items(receipts, key = { it.id }) { receipt ->
-            ReceiptCard(receipt)
+            ReceiptCard(
+                receipt = receipt,
+                charsPerLine = charsPerLine,
+                modifier = Modifier.fillMaxHeight(),
+            )
         }
     }
 }
 
 @Composable
-private fun ReceiptCard(receipt: Receipt) {
+private fun ReceiptCard(
+    receipt: Receipt,
+    charsPerLine: Int,
+    modifier: Modifier = Modifier,
+) {
+    val cardWidth = when (charsPerLine) {
+        21 -> 320.dp
+        else -> 520.dp
+    }
     Card(
         colors = CardDefaults.cardColors(containerColor = Color(0xFFFFFDF7)),
         shape = RoundedCornerShape(8.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-        modifier = Modifier.border(1.dp, Color(0xFFD6D0C3), RoundedCornerShape(8.dp)),
+        modifier = modifier
+            .width(cardWidth)
+            .border(1.dp, Color(0xFFD6D0C3), RoundedCornerShape(8.dp)),
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Top,
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(12.dp),
+        ) {
+            ReceiptCardHeader(receipt)
+            Spacer(modifier = Modifier.height(10.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .background(Color(0xFFEFE8D9), RoundedCornerShape(6.dp))
+                    .border(1.dp, Color(0xFFD6D0C3), RoundedCornerShape(6.dp))
+                    .padding(8.dp),
             ) {
-                Column {
-                    Text(
-                        text = receipt.createdAt.atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")),
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFF1E2526),
-                    )
-                    Text(
-                        text = listOfNotNull(receipt.sourceHost, receipt.sourcePort?.toString()).joinToString(":"),
-                        color = Color(0xFF697070),
-                        fontSize = 12.sp,
-                    )
-                }
-                Text(
-                    text = "${receipt.byteCount} bytes · ${receipt.status.label()}",
-                    color = if (receipt.status == ReceiptStatus.Completed) Color(0xFF1F7A5A) else Color(0xFFC78B24),
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
+                ReceiptPreview(
+                    receipt = receipt,
+                    charsPerLine = charsPerLine,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .verticalScroll(rememberScrollState()),
                 )
             }
-            Spacer(modifier = Modifier.height(14.dp))
-            ReceiptPreview(receipt)
             if (receipt.warnings.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(10.dp))
-                Text(
-                    text = "${receipt.warnings.size} parser warning(s)",
-                    color = Color(0xFFA33D2F),
-                    fontSize = 12.sp,
-                )
+                ReceiptDebugPanel(receipt)
             }
         }
     }
 }
 
 @Composable
-private fun ReceiptPreview(receipt: Receipt) {
+private fun ReceiptDebugPanel(receipt: Receipt) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .height(136.dp)
+            .background(Color(0xFFFFF4ED), RoundedCornerShape(6.dp))
+            .border(1.dp, Color(0xFFE0A08A), RoundedCornerShape(6.dp))
+            .verticalScroll(rememberScrollState())
+            .padding(8.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text(
+            text = "${receipt.warnings.size} parser warning(s) · raw ${receipt.rawBytes.size}/${receipt.byteCount} bytes",
+            color = Color(0xFFA33D2F),
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+        )
+        receipt.warnings.take(8).forEach { warning ->
+            Text(
+                text = "@${warning.offset}: ${warning.message}",
+                color = Color(0xFF1E2526),
+                fontSize = 11.sp,
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+            )
+            Text(
+                text = hexWindow(receipt.rawBytes, warning.offset),
+                color = Color(0xFF697070),
+                fontSize = 10.sp,
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+            )
+        }
+        if (receipt.warnings.size > 8) {
+            Text(
+                text = "... ${receipt.warnings.size - 8} more warning(s)",
+                color = Color(0xFFA33D2F),
+                fontSize = 11.sp,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ReceiptCardHeader(receipt: Receipt) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(
+            text = receipt.createdAt.atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")),
+            fontWeight = FontWeight.Bold,
+            color = Color(0xFF1E2526),
+            fontSize = 14.sp,
+        )
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+            itemVerticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = listOfNotNull(receipt.sourceHost, receipt.sourcePort?.toString()).joinToString(":"),
+                color = Color(0xFF697070),
+                fontSize = 12.sp,
+            )
+            Text(
+                text = "${receipt.byteCount} bytes",
+                color = Color(0xFF697070),
+                fontSize = 12.sp,
+            )
+            Text(
+                text = receipt.status.label(),
+                color = if (receipt.status == ReceiptStatus.Completed) Color(0xFF1F7A5A) else Color(0xFFC78B24),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ReceiptPreview(
+    receipt: Receipt,
+    charsPerLine: Int,
+    modifier: Modifier = Modifier,
+) {
+    val cellWidth = 10.dp
+    val baseFontSize = 14.sp
+    val horizontalPadding = 14.dp
+    val verticalPadding = 18.dp
+    val canvasLines = remember(receipt, charsPerLine) {
+        buildCanvasReceiptLines(receipt, charsPerLine)
+    }
+    val receiptHeight = remember(canvasLines) {
+        canvasLines.sumOf { line -> receiptItemHeightDp(line).value.toDouble() }.dp + verticalPadding * 2
+    }
+    val paperWidth = when (charsPerLine) {
+        21 -> 238.dp
+        else -> 450.dp
+    }
+    Canvas(
+        modifier = modifier
+            .width(paperWidth)
+            .height(receiptHeight)
             .background(Color.White)
             .border(1.dp, Color(0xFFE5E0D6))
-            .padding(horizontal = 14.dp, vertical = 18.dp),
     ) {
-        receipt.blocks.forEach { block ->
-            when (block) {
-                is ReceiptBlock.TextLine -> {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = when (block.align) {
-                            com.example.escposvirtualprinter.domain.model.TextAlign.Left -> Arrangement.Start
-                            com.example.escposvirtualprinter.domain.model.TextAlign.Center -> Arrangement.Center
-                            com.example.escposvirtualprinter.domain.model.TextAlign.Right -> Arrangement.End
-                        },
-                    ) {
-                        block.segments.forEach { segment ->
-                            Text(
-                                text = segment.text.ifEmpty { " " },
-                                fontFamily = FontFamily.Monospace,
-                                fontWeight = if (segment.style.bold) FontWeight.Black else FontWeight.Normal,
-                                textDecoration = if (segment.style.underline) androidx.compose.ui.text.style.TextDecoration.Underline else null,
-                                fontSize = (14 * segment.style.heightScale.coerceIn(1, 3)).sp,
-                                color = Color(0xFF1E2526),
-                            )
-                        }
-                    }
+        val canvas = drawContext.canvas.nativeCanvas
+        val cellWidthPx = cellWidth.toPx()
+        val dotSizePx = 2.dp.toPx()
+        val leftPx = horizontalPadding.toPx()
+        val topPx = verticalPadding.toPx()
+        val textColor = android.graphics.Color.rgb(30, 37, 38)
+        val eventColor = android.graphics.Color.rgb(105, 112, 112)
+        var y = topPx
+
+        canvasLines.forEach { line ->
+            val lineHeight = receiptItemHeightDp(line).toPx()
+            line.image?.let { image ->
+                val imageWidthPx = image.widthDots * dotSizePx * image.widthScale.coerceIn(1, 2)
+                val contentWidthPx = charsPerLine * cellWidthPx
+                val imageLeftPx = when (image.align) {
+                    com.example.escposvirtualprinter.domain.model.TextAlign.Left -> leftPx
+                    com.example.escposvirtualprinter.domain.model.TextAlign.Center -> leftPx + ((contentWidthPx - imageWidthPx) / 2f).coerceAtLeast(0f)
+                    com.example.escposvirtualprinter.domain.model.TextAlign.Right -> leftPx + (contentWidthPx - imageWidthPx).coerceAtLeast(0f)
                 }
-                is ReceiptBlock.DeviceEvent -> {
-                    HorizontalDivider(
-                        modifier = Modifier.padding(vertical = 8.dp),
-                        thickness = DividerDefaults.Thickness,
-                        color = Color(0xFFD6D0C3),
+                val imageTopPx = y + 6.dp.toPx()
+                val imagePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = textColor
+                    style = Paint.Style.FILL
+                }
+                drawRasterImage(canvas, image, imageLeftPx, imageTopPx, dotSizePx, imagePaint)
+                y += lineHeight
+                return@forEach
+            }
+
+            val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = if (line.event) eventColor else textColor
+                textSize = 14.sp.toPx() * line.style.heightScale.coerceIn(1, 3)
+                typeface = Typeface.create(Typeface.MONOSPACE, if (line.style.bold) Typeface.BOLD else Typeface.NORMAL)
+                isUnderlineText = line.style.underline
+            }
+            val baseline = y + lineHeight * 0.72f
+
+            if (line.separator) {
+                val separatorPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = android.graphics.Color.rgb(214, 208, 195)
+                    strokeWidth = 1.dp.toPx()
+                }
+                canvas.drawLine(leftPx, y + lineHeight / 2f, size.width - leftPx, y + lineHeight / 2f, separatorPaint)
+                y += lineHeight
+                return@forEach
+            }
+
+            val lineColumns = displayColumns(line.text) * line.style.widthScale.coerceIn(1, 3)
+            val leadingColumns = when (line.align) {
+                com.example.escposvirtualprinter.domain.model.TextAlign.Left -> 0
+                com.example.escposvirtualprinter.domain.model.TextAlign.Center -> ((charsPerLine - lineColumns) / 2).coerceAtLeast(0)
+                com.example.escposvirtualprinter.domain.model.TextAlign.Right -> (charsPerLine - lineColumns).coerceAtLeast(0)
+            }
+            displayTokens(line.text).forEach { token ->
+                val tokenX = leftPx + (leadingColumns + token.startColumns * line.style.widthScale.coerceIn(1, 3)) * cellWidthPx
+                val tokenWidth = token.columns * cellWidthPx * line.style.widthScale.coerceIn(1, 3)
+                val measuredWidth = paint.measureText(token.text).coerceAtLeast(1f)
+                val originalScaleX = paint.textScaleX
+                paint.textScaleX = originalScaleX * (tokenWidth / measuredWidth)
+                canvas.drawText(token.text, tokenX, baseline, paint)
+                paint.textScaleX = originalScaleX
+            }
+            y += lineHeight
+        }
+    }
+}
+
+private data class CanvasReceiptLine(
+    val text: String,
+    val align: com.example.escposvirtualprinter.domain.model.TextAlign,
+    val style: TextStyle,
+    val image: ReceiptBlock.RasterImage? = null,
+    val event: Boolean = false,
+    val separator: Boolean = false,
+)
+
+private data class DisplayRun(
+    val text: String,
+    val startColumns: Int,
+    val columns: Int,
+)
+
+private fun displayTokens(text: String): List<DisplayRun> {
+    val tokens = mutableListOf<DisplayRun>()
+    val current = StringBuilder()
+    var currentStartColumns = 0
+    var currentColumns = 0
+    var cursorColumns = 0
+
+    codePointStrings(text).forEach { char ->
+        val charColumns = displayColumns(char)
+        if (char.isBlank()) {
+            if (current.isNotEmpty()) {
+                tokens += DisplayRun(current.toString(), currentStartColumns, currentColumns)
+                current.clear()
+                currentColumns = 0
+            }
+            cursorColumns += charColumns
+        } else {
+            if (current.isEmpty()) {
+                currentStartColumns = cursorColumns
+            }
+            current.append(char)
+            currentColumns += charColumns
+            cursorColumns += charColumns
+        }
+    }
+
+    if (current.isNotEmpty()) {
+        tokens += DisplayRun(current.toString(), currentStartColumns, currentColumns)
+    }
+    return tokens
+}
+
+private fun buildCanvasReceiptLines(receipt: Receipt, charsPerLine: Int): List<CanvasReceiptLine> {
+    val lines = mutableListOf<CanvasReceiptLine>()
+    receipt.blocks.forEach { block ->
+        when (block) {
+            is ReceiptBlock.TextLine -> {
+                val lineText = block.segments.joinToString(separator = "") { it.text }.ifEmpty { " " }
+                val style = block.segments.lastOrNull()?.style ?: TextStyle()
+                splitByDisplayColumns(lineText, charsPerLine, style.widthScale.coerceIn(1, 3)).forEach { visualLine ->
+                    lines += CanvasReceiptLine(visualLine, block.align, style)
+                }
+            }
+            is ReceiptBlock.RasterImage -> {
+                lines += CanvasReceiptLine(
+                    text = "",
+                    align = block.align,
+                    style = TextStyle(),
+                    image = block,
+                )
+            }
+            is ReceiptBlock.DeviceEvent -> {
+                lines += CanvasReceiptLine("", com.example.escposvirtualprinter.domain.model.TextAlign.Left, TextStyle(), separator = true)
+                lines += CanvasReceiptLine(
+                    text = block.payload ?: block.label,
+                    align = com.example.escposvirtualprinter.domain.model.TextAlign.Center,
+                    style = TextStyle(),
+                    event = true,
+                )
+            }
+        }
+    }
+    return lines.ifEmpty {
+        listOf(CanvasReceiptLine(" ", com.example.escposvirtualprinter.domain.model.TextAlign.Left, TextStyle()))
+    }
+}
+
+private fun receiptItemHeightDp(line: CanvasReceiptLine): Dp {
+    line.image?.let { image ->
+        return image.heightDots.dp * 2 * image.heightScale.coerceIn(1, 2) + 12.dp
+    }
+    return lineHeightDp(line.style)
+}
+
+private fun lineHeightDp(style: TextStyle): Dp {
+    return 30.dp * style.heightScale.coerceIn(1, 3)
+}
+
+private fun drawRasterImage(
+    canvas: android.graphics.Canvas,
+    image: ReceiptBlock.RasterImage,
+    leftPx: Float,
+    topPx: Float,
+    dotSizePx: Float,
+    paint: Paint,
+) {
+    val widthScale = image.widthScale.coerceIn(1, 2)
+    val heightScale = image.heightScale.coerceIn(1, 2)
+    val scaledDotWidth = dotSizePx * widthScale
+    val scaledDotHeight = dotSizePx * heightScale
+
+    for (y in 0 until image.heightDots) {
+        val rowOffset = y * image.widthBytes
+        for (xByte in 0 until image.widthBytes) {
+            val value = image.data[rowOffset + xByte].toInt() and 0xff
+            for (bit in 0 until 8) {
+                if (value and (0x80 shr bit) == 0) continue
+                val x = xByte * 8 + bit
+                val rectLeft = leftPx + x * scaledDotWidth
+                val rectTop = topPx + y * scaledDotHeight
+                canvas.drawRect(rectLeft, rectTop, rectLeft + scaledDotWidth, rectTop + scaledDotHeight, paint)
+            }
+        }
+    }
+}
+
+private fun hexWindow(bytes: ByteArray, offset: Long, radius: Int = 24): String {
+    if (bytes.isEmpty()) return "raw bytes not captured"
+    val center = offset.coerceIn(0, (bytes.size - 1).toLong()).toInt()
+    val start = (center - radius).coerceAtLeast(0)
+    val endExclusive = (center + radius + 1).coerceAtMost(bytes.size)
+    val hex = (start until endExclusive).joinToString(" ") { index ->
+        val prefix = if (index == center) ">" else ""
+        prefix + (bytes[index].toInt() and 0xff).toString(16).uppercase().padStart(2, '0')
+    }
+    val ascii = (start until endExclusive).joinToString("") { index ->
+        val value = bytes[index].toInt() and 0xff
+        if (value in 0x20..0x7e) value.toChar().toString() else "."
+    }
+    return "%06X: %s\nascii: %s".format(start, hex, ascii)
+}
+
+private fun splitByDisplayColumns(text: String, maxColumns: Int, widthScale: Int): List<String> {
+    if (text.isEmpty()) return listOf(" ")
+    val lines = mutableListOf<String>()
+    val current = StringBuilder()
+    var currentColumns = 0
+
+    codePointStrings(text).forEach { char ->
+        val width = displayColumns(char) * widthScale
+        if (current.isNotEmpty() && currentColumns + width > maxColumns) {
+            lines += current.toString()
+            current.clear()
+            currentColumns = 0
+        }
+        current.append(char)
+        currentColumns += width
+    }
+
+    if (current.isNotEmpty()) {
+        lines += current.toString()
+    }
+    return lines.ifEmpty { listOf(" ") }
+}
+
+private fun displayColumns(text: String): Int {
+    var columns = 0
+    codePointStrings(text).forEach { char ->
+        val codePoint = char.codePointAt(0)
+        columns += if (isWideCodePoint(codePoint)) 2 else 1
+    }
+    return columns
+}
+
+private fun codePointStrings(text: String): List<String> {
+    val chars = mutableListOf<String>()
+    var index = 0
+    while (index < text.length) {
+        val codePoint = text.codePointAt(index)
+        chars += String(Character.toChars(codePoint))
+        index += Character.charCount(codePoint)
+    }
+    return chars
+}
+
+private fun isWideCodePoint(codePoint: Int): Boolean {
+    return codePoint in 0x1100..0x11ff ||
+        codePoint in 0x2e80..0xa4cf ||
+        codePoint in 0xac00..0xd7a3 ||
+        codePoint in 0xf900..0xfaff ||
+        codePoint in 0xfe10..0xfe19 ||
+        codePoint in 0xfe30..0xfe6f ||
+        codePoint in 0xff00..0xff60 ||
+        codePoint in 0xffe0..0xffe6
+}
+
+@Composable
+private fun SettingsScreen(
+    charsPerLine: Int,
+    onCharsPerLineChange: (Int) -> Unit,
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Card(
+            colors = CardDefaults.cardColors(containerColor = Color(0xFFFFFDF7)),
+            shape = RoundedCornerShape(8.dp),
+            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, Color(0xFFD6D0C3), RoundedCornerShape(8.dp)),
+        ) {
+            FlowRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                itemVerticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Settings",
+                    fontWeight = FontWeight.Black,
+                    fontSize = 20.sp,
+                    color = Color(0xFF1E2526),
+                )
+                Text(
+                    text = "$charsPerLine chars/line",
+                    color = Color(0xFF697070),
+                    fontSize = 13.sp,
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                )
+                OutlinedButton(onClick = onBack) { Text("Back") }
+            }
+        }
+
+        Card(
+            colors = CardDefaults.cardColors(containerColor = Color(0xFFFFFDF7)),
+            shape = RoundedCornerShape(8.dp),
+            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, Color(0xFFD6D0C3), RoundedCornerShape(8.dp)),
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    text = "Receipt line width",
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF1E2526),
+                )
+                Text(
+                    text = "Choose how many monospace characters fit on one displayed receipt line.",
+                    color = Color(0xFF697070),
+                    fontSize = 13.sp,
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    LineWidthOption(
+                        value = 21,
+                        selected = charsPerLine == 21,
+                        onSelect = { onCharsPerLineChange(21) },
                     )
-                    Text(
-                        text = block.payload ?: block.label,
-                        modifier = Modifier.fillMaxWidth(),
-                        textAlign = TextAlign.Center,
-                        color = Color(0xFF697070),
-                        fontSize = 12.sp,
-                        fontFamily = FontFamily.Monospace,
+                    LineWidthOption(
+                        value = 42,
+                        selected = charsPerLine == 42,
+                        onSelect = { onCharsPerLineChange(42) },
                     )
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun LineWidthOption(
+    value: Int,
+    selected: Boolean,
+    onSelect: () -> Unit,
+) {
+    if (selected) {
+        Button(onClick = onSelect) { Text("$value chars") }
+    } else {
+        OutlinedButton(onClick = onSelect) { Text("$value chars") }
     }
 }
 

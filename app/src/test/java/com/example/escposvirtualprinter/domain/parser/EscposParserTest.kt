@@ -49,6 +49,21 @@ class EscposParserTest {
     }
 
     @Test
+    fun parsesEscPrintModeWithoutLeakingModeByteAsText() {
+        val parser = EscposParser()
+
+        val events = parser.feed(byteArrayOf(0x1b, 0x21, 0x30, 0x41, 0x0a, 0x1b, 0x21, 0x00))
+
+        val style = (events[0] as EscposEvent.SetStyle).style
+        assertEquals(2, style.widthScale)
+        assertEquals(2, style.heightScale)
+        assertEquals("A", (events[1] as EscposEvent.Text).value)
+        assertTrue(events[2] is EscposEvent.LineFeed)
+        assertEquals(1, (events[3] as EscposEvent.SetStyle).style.widthScale)
+        assertEquals(1, (events[3] as EscposEvent.SetStyle).style.heightScale)
+    }
+
+    @Test
     fun parsesEucKrKoreanText() {
         val parser = EscposParser(Charset.forName("EUC-KR"))
         val bytes = "한글 영수증\n".toByteArray(Charset.forName("EUC-KR"))
@@ -113,5 +128,28 @@ class EscposParserTest {
         assertEquals(2, image.heightDots)
         assertEquals(2, image.widthScale)
         assertEquals(2, image.heightScale)
+    }
+
+    @Test
+    fun consumesKnownFsCommandsWithoutWarnings() {
+        val parser = EscposParser()
+
+        val events = parser.feed(byteArrayOf(0x1c, 0x26, 0x1c, 0x2e, 0x41, 0x0a))
+
+        assertTrue(events[0] is EscposEvent.IgnoredCommand)
+        assertTrue(events[1] is EscposEvent.IgnoredCommand)
+        assertEquals("A", (events[2] as EscposEvent.Text).value)
+        assertTrue(events[3] is EscposEvent.LineFeed)
+    }
+
+    @Test
+    fun consumesGsParenthesizedGraphicsCommandWithoutLeakingPayload() {
+        val parser = EscposParser()
+
+        val events = parser.feed(byteArrayOf(0x1d, 0x28, 0x4c, 0x02, 0x00, 0x30, 0x45, 0x41, 0x0a))
+
+        assertTrue(events[0] is EscposEvent.IgnoredCommand)
+        assertEquals("A", (events[1] as EscposEvent.Text).value)
+        assertTrue(events[2] is EscposEvent.LineFeed)
     }
 }

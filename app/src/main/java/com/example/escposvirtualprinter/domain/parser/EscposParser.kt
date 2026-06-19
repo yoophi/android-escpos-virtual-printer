@@ -38,6 +38,9 @@ class EscposParser(
                 DLE -> {
                     if (!parseDle(events)) break
                 }
+                FS -> {
+                    if (!parseFs(events)) break
+                }
                 else -> {
                     textBuffer.write(first)
                     consume(1)
@@ -80,6 +83,20 @@ class EscposParser(
                 events += EscposEvent.SetAlign(align)
                 true
             }
+            0x21 -> {
+                if (pending.size < 3) return false
+                val value = pending.elementAt(2)
+                consume(3)
+                flushText(events)
+                style = style.copy(
+                    bold = value and 0x08 != 0,
+                    underline = value and 0x80 != 0,
+                    widthScale = if (value and 0x20 != 0) 2 else 1,
+                    heightScale = if (value and 0x10 != 0) 2 else 1,
+                )
+                events += EscposEvent.SetStyle(style)
+                true
+            }
             0x45 -> {
                 if (pending.size < 3) return false
                 val value = pending.elementAt(2)
@@ -96,6 +113,12 @@ class EscposParser(
                 flushText(events)
                 style = style.copy(underline = value != 0)
                 events += EscposEvent.SetStyle(style)
+                true
+            }
+            0x4d, 0x20, 0x74 -> {
+                if (pending.size < 3) return false
+                consume(3)
+                flushText(events)
                 true
             }
             0x64 -> {
@@ -141,6 +164,7 @@ class EscposParser(
                 events += EscposEvent.Cut
                 true
             }
+            0x28 -> parseGsParenthesized(events)
             0x76 -> parseRasterImage(events)
             else -> {
                 consume(2)
@@ -149,6 +173,28 @@ class EscposParser(
                 true
             }
         }
+    }
+
+    private fun parseGsParenthesized(events: MutableList<EscposEvent>): Boolean {
+        if (pending.size < 5) return false
+        val group = pending.elementAt(2)
+        val dataSize = pending.elementAt(3) + pending.elementAt(4) * 256
+        if (dataSize < 0 || dataSize > MAX_GS_PARENTHESIZED_BYTES) {
+            consume(2)
+            flushText(events)
+            events += EscposEvent.UnknownCommand(listOf(GS, 0x28), offset)
+            return true
+        }
+        if (pending.size < 5 + dataSize) return false
+
+        consume(5 + dataSize)
+        flushText(events)
+        if (group == 0x4c) {
+            events += EscposEvent.IgnoredCommand("GS ( L graphics command")
+        } else {
+            events += EscposEvent.IgnoredCommand("GS ( ${group.toChar()} command")
+        }
+        return true
     }
 
     private fun parseRasterImage(events: MutableList<EscposEvent>): Boolean {
@@ -204,6 +250,49 @@ class EscposParser(
         return true
     }
 
+    private fun parseFs(events: MutableList<EscposEvent>): Boolean {
+        if (pending.size < 2) return false
+        return when (val command = pending.elementAt(1)) {
+            0x21 -> {
+                if (pending.size < 3) return false
+                val value = pending.elementAt(2)
+                consume(3)
+                flushText(events)
+                style = style.copy(
+                    underline = value and 0x80 != 0,
+                    widthScale = if (value and 0x04 != 0) 2 else style.widthScale,
+                    heightScale = if (value and 0x08 != 0) 2 else style.heightScale,
+                )
+                events += EscposEvent.SetStyle(style)
+                true
+            }
+            0x26 -> {
+                consume(2)
+                flushText(events)
+                events += EscposEvent.IgnoredCommand("FS & kanji mode")
+                true
+            }
+            0x2e -> {
+                consume(2)
+                flushText(events)
+                events += EscposEvent.IgnoredCommand("FS . cancel kanji mode")
+                true
+            }
+            0x43, 0x2d -> {
+                if (pending.size < 3) return false
+                consume(3)
+                flushText(events)
+                true
+            }
+            else -> {
+                consume(2)
+                flushText(events)
+                events += EscposEvent.UnknownCommand(listOf(FS, command), offset)
+                true
+            }
+        }
+    }
+
     private fun flushText(events: MutableList<EscposEvent>) {
         if (textBuffer.size() == 0) return
         events += EscposEvent.Text(textBuffer.toByteArray().toString(charset), style, align)
@@ -222,8 +311,10 @@ class EscposParser(
         const val CR = 0x0d
         const val ESC = 0x1b
         const val GS = 0x1d
+        const val FS = 0x1c
         const val DLE = 0x10
         const val MAX_RASTER_IMAGE_BYTES = 1_048_576
+        const val MAX_GS_PARENTHESIZED_BYTES = 1_048_576
         val RASTER_IMAGE_MODES = setOf(0, 1, 2, 3, 48, 49, 50, 51)
     }
 }

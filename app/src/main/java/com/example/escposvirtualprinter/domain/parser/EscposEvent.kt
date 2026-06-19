@@ -19,6 +19,7 @@ sealed interface EscposEvent {
         val widthScale: Int,
         val heightScale: Int,
     ) : EscposEvent
+    data class IgnoredCommand(val label: String) : EscposEvent
     data class StatusRequest(val value: Int) : EscposEvent
     data class UnknownCommand(val bytes: List<Int>, val offset: Long) : EscposEvent
 }

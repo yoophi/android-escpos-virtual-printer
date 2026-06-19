@@ -66,6 +66,7 @@ class ReceiptBuilder(
             is EscposEvent.StatusRequest -> {
                 blocks += ReceiptBlock.DeviceEvent("Status request", "DLE EOT ${event.value}")
             }
+            is EscposEvent.IgnoredCommand -> Unit
             is EscposEvent.UnknownCommand -> {
                 warnings += ParseWarning("Unknown command: ${event.bytes.joinToString(" ") { it.toString(16).padStart(2, '0') }}", event.offset)
             }

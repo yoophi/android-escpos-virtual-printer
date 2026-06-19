@@ -38,6 +38,15 @@ class EscposParserTest {
     }
 
     @Test
+    fun parsesEscPartialCutCommand() {
+        val parser = EscposParser()
+
+        val events = parser.feed(byteArrayOf(0x1b, 0x69))
+
+        assertEquals(EscposEvent.Cut, events.single())
+    }
+
+    @Test
     fun parsesTextSize() {
         val parser = EscposParser()
 

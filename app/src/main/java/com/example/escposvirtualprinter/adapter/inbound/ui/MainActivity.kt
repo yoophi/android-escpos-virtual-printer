@@ -1,6 +1,9 @@
 package com.example.escposvirtualprinter.adapter.inbound.ui
 
 import android.Manifest
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import android.content.pm.PackageManager
 import android.graphics.Paint
 import android.graphics.Typeface
@@ -15,6 +18,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
@@ -28,6 +32,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -36,11 +41,13 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DividerDefaults
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
@@ -64,13 +71,15 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.escposvirtualprinter.AppGraph
 import com.example.escposvirtualprinter.adapter.inbound.service.PrinterForegroundService
 import com.example.escposvirtualprinter.application.port.inbound.PrinterServerState
 import com.example.escposvirtualprinter.domain.model.Receipt
 import com.example.escposvirtualprinter.domain.model.ReceiptBlock
-import com.example.escposvirtualprinter.domain.model.ReceiptStatus
 import com.example.escposvirtualprinter.domain.model.TextStyle
 import java.net.NetworkInterface
 import java.time.ZoneId
@@ -97,6 +106,15 @@ private fun VirtualPrinterApp() {
     val preferences = remember { context.getSharedPreferences("printer_settings", android.content.Context.MODE_PRIVATE) }
     var portText by remember { mutableStateOf(state.port.toString()) }
     var currentScreen by rememberSaveable { mutableStateOf(AppScreen.Main) }
+    var serverPanelVisible by rememberSaveable {
+        mutableStateOf(preferences.getBoolean("server_panel_visible", true))
+    }
+    var autoStartServer by rememberSaveable {
+        mutableStateOf(preferences.getBoolean("auto_start_server", false))
+    }
+    var fullscreenMode by rememberSaveable {
+        mutableStateOf(preferences.getBoolean("fullscreen_mode", false))
+    }
     var charsPerLine by rememberSaveable {
         mutableIntStateOf(preferences.getInt("chars_per_line", 42).takeIf { it == 21 || it == 42 } ?: 42)
     }
@@ -117,51 +135,115 @@ private fun VirtualPrinterApp() {
         preferences.edit().putInt("chars_per_line", charsPerLine).apply()
     }
 
+    LaunchedEffect(autoStartServer) {
+        preferences.edit().putBoolean("auto_start_server", autoStartServer).apply()
+    }
+
+    LaunchedEffect(fullscreenMode) {
+        preferences.edit().putBoolean("fullscreen_mode", fullscreenMode).apply()
+        context.findActivity()?.let { activity ->
+            applyFullscreenMode(activity, fullscreenMode)
+        }
+    }
+
+    LaunchedEffect(serverPanelVisible) {
+        preferences.edit().putBoolean("server_panel_visible", serverPanelVisible).apply()
+    }
+
+    LaunchedEffect(Unit) {
+        if (autoStartServer && !state.running) {
+            val port = portText.toIntOrNull()?.coerceIn(1, 65535) ?: 9100
+            ContextCompat.startForegroundService(context, PrinterForegroundService.startIntent(context, port))
+        }
+    }
+
     Surface(
         modifier = Modifier.fillMaxSize(),
         color = Color(0xFFF7F4ED),
     ) {
         Column(
             modifier = Modifier
-                .fillMaxSize()
-                .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+                .fillMaxSize(),
         ) {
-            when (currentScreen) {
-                AppScreen.Main -> {
-                    ServerPanel(
-                        state = state,
-                        tcpAddresses = tcpAddresses,
-                        portText = portText,
-                        charsPerLine = charsPerLine,
-                        onPortChange = { portText = it.filter(Char::isDigit).take(5) },
-                        onStart = {
-                            val port = portText.toIntOrNull()?.coerceIn(1, 65535) ?: 9100
-                            ContextCompat.startForegroundService(context, PrinterForegroundService.startIntent(context, port))
-                        },
-                        onStop = {
-                            context.startService(PrinterForegroundService.stopIntent(context))
-                        },
-                        onClear = {
-                            scope.launchClearReceipts()
-                        },
-                        onOpenSettings = {
-                            currentScreen = AppScreen.Settings
-                        },
-                    )
-                    ReceiptList(
-                        receipts = state.receipts,
-                        charsPerLine = charsPerLine,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-                AppScreen.Settings -> {
-                    SettingsScreen(
-                        charsPerLine = charsPerLine,
-                        onCharsPerLineChange = { charsPerLine = it },
-                        onBack = { currentScreen = AppScreen.Main },
-                        modifier = Modifier.weight(1f),
-                    )
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(4.dp)
+                    .background(if (state.running) Color(0xFF1F7A5A) else Color(0xFFD6D0C3)),
+            )
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(start = 12.dp, top = 12.dp, end = 12.dp, bottom = 0.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                when (currentScreen) {
+                    AppScreen.Main -> {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .weight(1f),
+                        ) {
+                            ReceiptList(
+                                receipts = state.receipts,
+                                charsPerLine = charsPerLine,
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                            if (serverPanelVisible) {
+                                ServerPanel(
+                                    state = state,
+                                    tcpAddresses = tcpAddresses,
+                                    portText = portText,
+                                    charsPerLine = charsPerLine,
+                                    onPortChange = { portText = it.filter(Char::isDigit).take(5) },
+                                    onStart = {
+                                        val port = portText.toIntOrNull()?.coerceIn(1, 65535) ?: 9100
+                                        ContextCompat.startForegroundService(context, PrinterForegroundService.startIntent(context, port))
+                                    },
+                                    onStop = {
+                                        context.startService(PrinterForegroundService.stopIntent(context))
+                                    },
+                                    onClear = {
+                                        scope.launchClearReceipts()
+                                    },
+                                    onOpenSettings = {
+                                        currentScreen = AppScreen.Settings
+                                    },
+                                    modifier = Modifier
+                                        .align(Alignment.TopStart)
+                                        .fillMaxWidth()
+                                        .padding(end = 68.dp),
+                                )
+                            }
+                            Column(
+                                modifier = Modifier.align(Alignment.TopEnd),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                                horizontalAlignment = Alignment.End,
+                            ) {
+                                ServerPanelToggleButton(
+                                    visible = serverPanelVisible,
+                                    running = state.running,
+                                    onToggle = { serverPanelVisible = !serverPanelVisible },
+                                )
+                                FullscreenToggleButton(
+                                    fullscreen = fullscreenMode,
+                                    onToggle = { fullscreenMode = !fullscreenMode },
+                                )
+                            }
+                        }
+                    }
+                    AppScreen.Settings -> {
+                        SettingsScreen(
+                            charsPerLine = charsPerLine,
+                            autoStartServer = autoStartServer,
+                            fullscreenMode = fullscreenMode,
+                            onCharsPerLineChange = { charsPerLine = it },
+                            onAutoStartServerChange = { autoStartServer = it },
+                            onFullscreenModeChange = { fullscreenMode = it },
+                            onBack = { currentScreen = AppScreen.Main },
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
                 }
             }
         }
@@ -198,12 +280,32 @@ private fun discoverTcpAddresses(port: Int): List<String> {
     }.getOrDefault(emptyList())
 }
 
+private tailrec fun Context.findActivity(): Activity? {
+    return when (this) {
+        is Activity -> this
+        is ContextWrapper -> baseContext.findActivity()
+        else -> null
+    }
+}
+
+private fun applyFullscreenMode(activity: Activity, fullscreen: Boolean) {
+    WindowCompat.setDecorFitsSystemWindows(activity.window, !fullscreen)
+    val controller = WindowCompat.getInsetsController(activity.window, activity.window.decorView)
+    if (fullscreen) {
+        controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        controller.hide(WindowInsetsCompat.Type.systemBars())
+    } else {
+        controller.show(WindowInsetsCompat.Type.systemBars())
+    }
+}
+
 @Composable
 private fun ServerPanel(
     state: PrinterServerState,
     tcpAddresses: List<String>,
     portText: String,
     charsPerLine: Int,
+    modifier: Modifier = Modifier,
     onPortChange: (String) -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit,
@@ -214,7 +316,7 @@ private fun ServerPanel(
         colors = CardDefaults.cardColors(containerColor = Color(0xFFFFFDF7)),
         shape = RoundedCornerShape(8.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-        modifier = Modifier.border(1.dp, Color(0xFFD6D0C3), RoundedCornerShape(8.dp)),
+        modifier = modifier.border(1.dp, Color(0xFFD6D0C3), RoundedCornerShape(8.dp)),
     ) {
         FlowRow(
             modifier = Modifier
@@ -307,6 +409,47 @@ private fun ServerPanel(
 }
 
 @Composable
+private fun ServerPanelToggleButton(
+    visible: Boolean,
+    running: Boolean,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    FloatingActionButton(
+        onClick = onToggle,
+        containerColor = if (running) Color(0xFF1F7A5A) else Color(0xFFFFFDF7),
+        contentColor = if (running) Color.White else Color(0xFFA33D2F),
+        modifier = modifier,
+    ) {
+        Text(
+            text = if (visible) "Hide" else "TCP",
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+        )
+    }
+}
+
+@Composable
+private fun FullscreenToggleButton(
+    fullscreen: Boolean,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    FloatingActionButton(
+        onClick = onToggle,
+        containerColor = if (fullscreen) Color(0xFF245F8F) else Color(0xFFFFFDF7),
+        contentColor = if (fullscreen) Color.White else Color(0xFF245F8F),
+        modifier = modifier,
+    ) {
+        Text(
+            text = if (fullscreen) "Exit" else "Full",
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+        )
+    }
+}
+
+@Composable
 private fun ReceiptList(
     receipts: List<Receipt>,
     charsPerLine: Int,
@@ -330,15 +473,21 @@ private fun ReceiptList(
         return
     }
 
+    val listState = rememberLazyListState()
+    LaunchedEffect(receipts.firstOrNull()?.id) {
+        listState.animateScrollToItem(0)
+    }
+
     LazyRow(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxSize(),
+        state = listState,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         items(receipts, key = { it.id }) { receipt ->
             ReceiptCard(
                 receipt = receipt,
                 charsPerLine = charsPerLine,
-                modifier = Modifier.fillMaxHeight(),
+                modifier = Modifier.fillParentMaxHeight(),
             )
         }
     }
@@ -350,45 +499,24 @@ private fun ReceiptCard(
     charsPerLine: Int,
     modifier: Modifier = Modifier,
 ) {
-    val cardWidth = when (charsPerLine) {
-        21 -> 320.dp
-        else -> 520.dp
-    }
-    Card(
-        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFFDF7)),
-        shape = RoundedCornerShape(8.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+    Column(
         modifier = modifier
-            .width(cardWidth)
-            .border(1.dp, Color(0xFFD6D0C3), RoundedCornerShape(8.dp)),
+            .width(receiptPaperWidth(charsPerLine))
+            .fillMaxHeight()
+            .background(Color.White),
     ) {
-        Column(
+        ReceiptCardHeader(receipt)
+        Spacer(modifier = Modifier.height(8.dp))
+        ReceiptPreview(
+            receipt = receipt,
+            charsPerLine = charsPerLine,
             modifier = Modifier
-                .fillMaxSize()
-                .padding(12.dp),
-        ) {
-            ReceiptCardHeader(receipt)
-            Spacer(modifier = Modifier.height(10.dp))
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-                    .background(Color(0xFFEFE8D9), RoundedCornerShape(6.dp))
-                    .border(1.dp, Color(0xFFD6D0C3), RoundedCornerShape(6.dp))
-                    .padding(8.dp),
-            ) {
-                ReceiptPreview(
-                    receipt = receipt,
-                    charsPerLine = charsPerLine,
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .verticalScroll(rememberScrollState()),
-                )
-            }
-            if (receipt.warnings.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(10.dp))
-                ReceiptDebugPanel(receipt)
-            }
+                .fillMaxWidth()
+                .weight(1f),
+        )
+        if (receipt.warnings.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(8.dp))
+            ReceiptDebugPanel(receipt)
         }
     }
 }
@@ -437,38 +565,24 @@ private fun ReceiptDebugPanel(receipt: Receipt) {
 
 @Composable
 private fun ReceiptCardHeader(receipt: Receipt) {
-    Column(
+    val metadataColor = Color(0xFF697070)
+    val metadataFontSize = 12.sp
+    Row(
         modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
             text = receipt.createdAt.atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")),
-            fontWeight = FontWeight.Bold,
-            color = Color(0xFF1E2526),
-            fontSize = 14.sp,
+            color = metadataColor,
+            fontSize = metadataFontSize,
         )
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-            itemVerticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = listOfNotNull(receipt.sourceHost, receipt.sourcePort?.toString()).joinToString(":"),
-                color = Color(0xFF697070),
-                fontSize = 12.sp,
-            )
-            Text(
-                text = "${receipt.byteCount} bytes",
-                color = Color(0xFF697070),
-                fontSize = 12.sp,
-            )
-            Text(
-                text = receipt.status.label(),
-                color = if (receipt.status == ReceiptStatus.Completed) Color(0xFF1F7A5A) else Color(0xFFC78B24),
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold,
-            )
-        }
+        Text(
+            text = "${listOfNotNull(receipt.sourceHost, receipt.sourcePort?.toString()).joinToString(":")}  ${receipt.byteCount} bytes",
+            color = metadataColor,
+            fontSize = metadataFontSize,
+            textAlign = TextAlign.End,
+        )
     }
 }
 
@@ -488,81 +602,96 @@ private fun ReceiptPreview(
     val receiptHeight = remember(canvasLines) {
         canvasLines.sumOf { line -> receiptItemHeightDp(line).value.toDouble() }.dp + verticalPadding * 2
     }
-    val paperWidth = when (charsPerLine) {
+    BoxWithConstraints(
+        modifier = modifier
+            .width(receiptPaperWidth(charsPerLine)),
+    ) {
+        val canvasHeight = if (receiptHeight > maxHeight) receiptHeight else maxHeight
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.White)
+                .verticalScroll(rememberScrollState()),
+        ) {
+            Canvas(
+                modifier = Modifier
+                    .width(receiptPaperWidth(charsPerLine))
+                    .height(canvasHeight)
+                    .background(Color.White),
+            ) {
+                val canvas = drawContext.canvas.nativeCanvas
+                val cellWidthPx = cellWidth.toPx()
+                val dotSizePx = 2.dp.toPx()
+                val leftPx = horizontalPadding.toPx()
+                val topPx = verticalPadding.toPx()
+                val textColor = android.graphics.Color.rgb(30, 37, 38)
+                val eventColor = android.graphics.Color.rgb(105, 112, 112)
+                var y = topPx
+
+                canvasLines.forEach { line ->
+                    val lineHeight = receiptItemHeightDp(line).toPx()
+                    line.image?.let { image ->
+                        val imageWidthPx = image.widthDots * dotSizePx * image.widthScale.coerceIn(1, 2)
+                        val contentWidthPx = charsPerLine * cellWidthPx
+                        val imageLeftPx = when (image.align) {
+                            com.example.escposvirtualprinter.domain.model.TextAlign.Left -> leftPx
+                            com.example.escposvirtualprinter.domain.model.TextAlign.Center -> leftPx + ((contentWidthPx - imageWidthPx) / 2f).coerceAtLeast(0f)
+                            com.example.escposvirtualprinter.domain.model.TextAlign.Right -> leftPx + (contentWidthPx - imageWidthPx).coerceAtLeast(0f)
+                        }
+                        val imageTopPx = y + 6.dp.toPx()
+                        val imagePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                            color = textColor
+                            style = Paint.Style.FILL
+                        }
+                        drawRasterImage(canvas, image, imageLeftPx, imageTopPx, dotSizePx, imagePaint)
+                        y += lineHeight
+                        return@forEach
+                    }
+
+                    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                        color = if (line.event) eventColor else textColor
+                        textSize = 14.sp.toPx() * line.style.heightScale.coerceIn(1, 3)
+                        typeface = Typeface.create(Typeface.MONOSPACE, if (line.style.bold) Typeface.BOLD else Typeface.NORMAL)
+                        isUnderlineText = line.style.underline
+                    }
+                    val baseline = y + lineHeight * 0.72f
+
+                    if (line.separator) {
+                        val separatorPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                            color = android.graphics.Color.rgb(214, 208, 195)
+                            strokeWidth = 1.dp.toPx()
+                        }
+                        canvas.drawLine(leftPx, y + lineHeight / 2f, size.width - leftPx, y + lineHeight / 2f, separatorPaint)
+                        y += lineHeight
+                        return@forEach
+                    }
+
+                    val lineColumns = displayColumns(line.text) * line.style.widthScale.coerceIn(1, 3)
+                    val leadingColumns = when (line.align) {
+                        com.example.escposvirtualprinter.domain.model.TextAlign.Left -> 0
+                        com.example.escposvirtualprinter.domain.model.TextAlign.Center -> ((charsPerLine - lineColumns) / 2).coerceAtLeast(0)
+                        com.example.escposvirtualprinter.domain.model.TextAlign.Right -> (charsPerLine - lineColumns).coerceAtLeast(0)
+                    }
+                    displayTokens(line.text).forEach { token ->
+                        val tokenX = leftPx + (leadingColumns + token.startColumns * line.style.widthScale.coerceIn(1, 3)) * cellWidthPx
+                        val tokenWidth = token.columns * cellWidthPx * line.style.widthScale.coerceIn(1, 3)
+                        val measuredWidth = paint.measureText(token.text).coerceAtLeast(1f)
+                        val originalScaleX = paint.textScaleX
+                        paint.textScaleX = originalScaleX * (tokenWidth / measuredWidth)
+                        canvas.drawText(token.text, tokenX, baseline, paint)
+                        paint.textScaleX = originalScaleX
+                    }
+                    y += lineHeight
+                }
+            }
+        }
+    }
+}
+
+private fun receiptPaperWidth(charsPerLine: Int): Dp {
+    return when (charsPerLine) {
         21 -> 238.dp
         else -> 450.dp
-    }
-    Canvas(
-        modifier = modifier
-            .width(paperWidth)
-            .height(receiptHeight)
-            .background(Color.White)
-            .border(1.dp, Color(0xFFE5E0D6))
-    ) {
-        val canvas = drawContext.canvas.nativeCanvas
-        val cellWidthPx = cellWidth.toPx()
-        val dotSizePx = 2.dp.toPx()
-        val leftPx = horizontalPadding.toPx()
-        val topPx = verticalPadding.toPx()
-        val textColor = android.graphics.Color.rgb(30, 37, 38)
-        val eventColor = android.graphics.Color.rgb(105, 112, 112)
-        var y = topPx
-
-        canvasLines.forEach { line ->
-            val lineHeight = receiptItemHeightDp(line).toPx()
-            line.image?.let { image ->
-                val imageWidthPx = image.widthDots * dotSizePx * image.widthScale.coerceIn(1, 2)
-                val contentWidthPx = charsPerLine * cellWidthPx
-                val imageLeftPx = when (image.align) {
-                    com.example.escposvirtualprinter.domain.model.TextAlign.Left -> leftPx
-                    com.example.escposvirtualprinter.domain.model.TextAlign.Center -> leftPx + ((contentWidthPx - imageWidthPx) / 2f).coerceAtLeast(0f)
-                    com.example.escposvirtualprinter.domain.model.TextAlign.Right -> leftPx + (contentWidthPx - imageWidthPx).coerceAtLeast(0f)
-                }
-                val imageTopPx = y + 6.dp.toPx()
-                val imagePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                    color = textColor
-                    style = Paint.Style.FILL
-                }
-                drawRasterImage(canvas, image, imageLeftPx, imageTopPx, dotSizePx, imagePaint)
-                y += lineHeight
-                return@forEach
-            }
-
-            val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = if (line.event) eventColor else textColor
-                textSize = 14.sp.toPx() * line.style.heightScale.coerceIn(1, 3)
-                typeface = Typeface.create(Typeface.MONOSPACE, if (line.style.bold) Typeface.BOLD else Typeface.NORMAL)
-                isUnderlineText = line.style.underline
-            }
-            val baseline = y + lineHeight * 0.72f
-
-            if (line.separator) {
-                val separatorPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                    color = android.graphics.Color.rgb(214, 208, 195)
-                    strokeWidth = 1.dp.toPx()
-                }
-                canvas.drawLine(leftPx, y + lineHeight / 2f, size.width - leftPx, y + lineHeight / 2f, separatorPaint)
-                y += lineHeight
-                return@forEach
-            }
-
-            val lineColumns = displayColumns(line.text) * line.style.widthScale.coerceIn(1, 3)
-            val leadingColumns = when (line.align) {
-                com.example.escposvirtualprinter.domain.model.TextAlign.Left -> 0
-                com.example.escposvirtualprinter.domain.model.TextAlign.Center -> ((charsPerLine - lineColumns) / 2).coerceAtLeast(0)
-                com.example.escposvirtualprinter.domain.model.TextAlign.Right -> (charsPerLine - lineColumns).coerceAtLeast(0)
-            }
-            displayTokens(line.text).forEach { token ->
-                val tokenX = leftPx + (leadingColumns + token.startColumns * line.style.widthScale.coerceIn(1, 3)) * cellWidthPx
-                val tokenWidth = token.columns * cellWidthPx * line.style.widthScale.coerceIn(1, 3)
-                val measuredWidth = paint.measureText(token.text).coerceAtLeast(1f)
-                val originalScaleX = paint.textScaleX
-                paint.textScaleX = originalScaleX * (tokenWidth / measuredWidth)
-                canvas.drawText(token.text, tokenX, baseline, paint)
-                paint.textScaleX = originalScaleX
-            }
-            y += lineHeight
-        }
     }
 }
 
@@ -760,7 +889,11 @@ private fun isWideCodePoint(codePoint: Int): Boolean {
 @Composable
 private fun SettingsScreen(
     charsPerLine: Int,
+    autoStartServer: Boolean,
+    fullscreenMode: Boolean,
     onCharsPerLineChange: (Int) -> Unit,
+    onAutoStartServerChange: (Boolean) -> Unit,
+    onFullscreenModeChange: (Boolean) -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -839,6 +972,80 @@ private fun SettingsScreen(
                 }
             }
         }
+
+        Card(
+            colors = CardDefaults.cardColors(containerColor = Color(0xFFFFFDF7)),
+            shape = RoundedCornerShape(8.dp),
+            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, Color(0xFFD6D0C3), RoundedCornerShape(8.dp)),
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(
+                        text = "Auto start TCP server",
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF1E2526),
+                    )
+                    Text(
+                        text = "Start listening automatically when the app opens.",
+                        color = Color(0xFF697070),
+                        fontSize = 13.sp,
+                    )
+                }
+                Switch(
+                    checked = autoStartServer,
+                    onCheckedChange = onAutoStartServerChange,
+                )
+            }
+        }
+
+        Card(
+            colors = CardDefaults.cardColors(containerColor = Color(0xFFFFFDF7)),
+            shape = RoundedCornerShape(8.dp),
+            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, Color(0xFFD6D0C3), RoundedCornerShape(8.dp)),
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(
+                        text = "Fullscreen mode",
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF1E2526),
+                    )
+                    Text(
+                        text = "Hide Android system bars and use the full display.",
+                        color = Color(0xFF697070),
+                        fontSize = 13.sp,
+                    )
+                }
+                Switch(
+                    checked = fullscreenMode,
+                    onCheckedChange = onFullscreenModeChange,
+                )
+            }
+        }
     }
 }
 
@@ -852,14 +1059,6 @@ private fun LineWidthOption(
         Button(onClick = onSelect) { Text("$value chars") }
     } else {
         OutlinedButton(onClick = onSelect) { Text("$value chars") }
-    }
-}
-
-private fun ReceiptStatus.label(): String {
-    return when (this) {
-        ReceiptStatus.Receiving -> "receiving"
-        ReceiptStatus.Completed -> "completed"
-        ReceiptStatus.Error -> "error"
     }
 }
 

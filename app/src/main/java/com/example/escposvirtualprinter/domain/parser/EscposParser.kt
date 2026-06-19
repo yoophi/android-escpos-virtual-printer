@@ -129,6 +129,12 @@ class EscposParser(
                 events += EscposEvent.FeedLines(value)
                 true
             }
+            0x69 -> {
+                consume(2)
+                flushText(events)
+                events += EscposEvent.Cut
+                true
+            }
             else -> {
                 consume(2)
                 flushText(events)

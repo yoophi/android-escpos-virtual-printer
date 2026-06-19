@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">ESC/POS Virtual Printer</string>
+    <string name="printer_service_notification_channel">Virtual printer server</string>
+</resources>

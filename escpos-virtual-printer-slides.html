@@ -1,0 +1,470 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Android ESC/POS Virtual Printer 설계 요약</title>
+  <style>
+    :root {
+      --paper: #f7f4ed;
+      --ink: #1e2526;
+      --muted: #697070;
+      --line: #d6d0c3;
+      --receipt: #fffdf7;
+      --green: #1f7a5a;
+      --red: #a33d2f;
+      --blue: #245f8f;
+      --yellow: #c78b24;
+      --shadow: 0 22px 70px rgba(44, 38, 28, .18);
+      --mono: "SFMono-Regular", "Menlo", "Consolas", monospace;
+      --sans: "Avenir Next", "Segoe UI", "Noto Sans KR", sans-serif;
+      --serif: "Georgia", "Times New Roman", serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    html {
+      scroll-snap-type: y mandatory;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: var(--sans);
+    }
+
+    body {
+      margin: 0;
+      background:
+        linear-gradient(90deg, rgba(30,37,38,.05) 1px, transparent 1px) 0 0 / 24px 24px,
+        linear-gradient(0deg, rgba(30,37,38,.035) 1px, transparent 1px) 0 0 / 24px 24px,
+        var(--paper);
+    }
+
+    .slide {
+      min-height: 100vh;
+      scroll-snap-align: start;
+      display: grid;
+      align-items: center;
+      padding: 54px 7vw;
+      position: relative;
+      overflow: hidden;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .slide::after {
+      content: attr(data-page);
+      position: absolute;
+      right: 32px;
+      bottom: 24px;
+      font: 700 12px/1 var(--mono);
+      color: var(--muted);
+      letter-spacing: .08em;
+    }
+
+    .kicker {
+      font: 800 13px/1 var(--mono);
+      color: var(--green);
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      margin-bottom: 18px;
+    }
+
+    h1, h2 {
+      margin: 0;
+      letter-spacing: 0;
+      color: var(--ink);
+    }
+
+    h1 {
+      max-width: 980px;
+      font: 800 clamp(42px, 7vw, 92px)/.94 var(--serif);
+    }
+
+    h2 {
+      font: 800 clamp(34px, 5vw, 64px)/1.02 var(--serif);
+      max-width: 920px;
+    }
+
+    p {
+      color: var(--muted);
+      font-size: clamp(18px, 2.1vw, 28px);
+      line-height: 1.45;
+      max-width: 940px;
+      margin: 24px 0 0;
+    }
+
+    .grid {
+      display: grid;
+      gap: 22px;
+      margin-top: 34px;
+    }
+
+    .two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+
+    .panel, .receipt, .table {
+      background: rgba(255,253,247,.78);
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow);
+    }
+
+    .panel {
+      padding: 26px;
+      min-height: 170px;
+    }
+
+    .panel strong {
+      display: block;
+      color: var(--ink);
+      font-size: 23px;
+      line-height: 1.15;
+      margin-bottom: 12px;
+    }
+
+    .panel span, .panel li {
+      color: var(--muted);
+      font-size: 17px;
+      line-height: 1.45;
+    }
+
+    ul {
+      margin: 14px 0 0;
+      padding-left: 21px;
+    }
+
+    code {
+      font-family: var(--mono);
+      background: #ebe5d8;
+      padding: 2px 6px;
+      border: 1px solid var(--line);
+      color: #273233;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 14px;
+      align-items: stretch;
+      margin-top: 42px;
+    }
+
+    .node {
+      min-height: 132px;
+      padding: 20px;
+      background: var(--receipt);
+      border: 2px solid var(--ink);
+      position: relative;
+    }
+
+    .node:not(:last-child)::after {
+      content: "";
+      position: absolute;
+      right: -17px;
+      top: 50%;
+      width: 18px;
+      height: 2px;
+      background: var(--ink);
+    }
+
+    .node b {
+      display: block;
+      font-size: 20px;
+      margin-bottom: 8px;
+    }
+
+    .node small {
+      color: var(--muted);
+      font: 600 13px/1.35 var(--mono);
+    }
+
+    .receipt {
+      width: min(420px, 100%);
+      padding: 26px 26px 32px;
+      font-family: var(--mono);
+      position: relative;
+    }
+
+    .receipt::before,
+    .receipt::after {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      height: 10px;
+      background: repeating-linear-gradient(90deg, transparent 0 13px, var(--paper) 13px 24px);
+    }
+
+    .receipt::before { top: -1px; }
+    .receipt::after { bottom: -1px; }
+
+    .receipt .center { text-align: center; }
+    .receipt .right { text-align: right; }
+    .receipt .bold { font-weight: 900; }
+    .receipt .cut {
+      border-top: 1px dashed #878176;
+      margin-top: 16px;
+      padding-top: 13px;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    .split {
+      display: grid;
+      grid-template-columns: 1.1fr .9fr;
+      gap: 48px;
+      align-items: center;
+    }
+
+    .table {
+      width: 100%;
+      border-collapse: collapse;
+      overflow: hidden;
+      font-size: 17px;
+      margin-top: 32px;
+    }
+
+    .table th,
+    .table td {
+      border-bottom: 1px solid var(--line);
+      padding: 16px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    .table th {
+      color: var(--ink);
+      background: #efe8d9;
+      font-size: 15px;
+    }
+
+    .table td {
+      color: var(--muted);
+      background: rgba(255,253,247,.86);
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      height: 28px;
+      padding: 0 9px;
+      border: 1px solid currentColor;
+      font: 800 12px/1 var(--mono);
+      margin: 0 6px 8px 0;
+    }
+
+    .green { color: var(--green); }
+    .red { color: var(--red); }
+    .blue { color: var(--blue); }
+    .yellow { color: var(--yellow); }
+
+    .source {
+      font-size: 14px;
+      line-height: 1.55;
+      color: var(--muted);
+      max-width: 1020px;
+    }
+
+    .source a {
+      color: var(--blue);
+      text-decoration: none;
+      border-bottom: 1px solid rgba(36, 95, 143, .35);
+    }
+
+    @media (max-width: 900px) {
+      .slide { padding: 38px 22px; }
+      .two, .three, .four, .split { grid-template-columns: 1fr; }
+      .flow { grid-template-columns: 1fr; }
+      .node:not(:last-child)::after { display: none; }
+      .table { font-size: 15px; }
+      .table th, .table td { padding: 12px; }
+    }
+  </style>
+</head>
+<body>
+  <section class="slide" data-page="01 / 10">
+    <div>
+      <div class="kicker">Android ESC/POS Virtual Printer</div>
+      <h1>TCP로 받은 프린터 명령을 화면의 영수증으로 재구성한다</h1>
+      <p>핵심은 소켓 서버, 바이트 스트림 파서, 영수증 문서 모델, 스크롤 가능한 UI를 서로 분리하는 것이다.</p>
+    </div>
+  </section>
+
+  <section class="slide" data-page="02 / 10">
+    <div class="split">
+      <div>
+        <div class="kicker">Product Shape</div>
+        <h2>앱은 프린터처럼 열리고, 뷰어처럼 보여준다</h2>
+        <p>기본 포트는 <code>9100</code>. POS가 보낸 ESC/POS 바이트를 수신하고, 컷 명령 또는 timeout으로 영수증을 완료한다.</p>
+      </div>
+      <div class="receipt">
+        <div class="center bold">VIRTUAL PRINTER</div>
+        <br>
+        <div>2026-06-19 13:00</div>
+        <div>TCP 192.168.0.42:51522</div>
+        <br>
+        <div>AMERICANO        2   8,000</div>
+        <div>LATTE            1   5,000</div>
+        <div>--------------------------------</div>
+        <div class="right bold">TOTAL 13,000</div>
+        <div class="cut">GS V: receipt completed</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide" data-page="03 / 10">
+    <div>
+      <div class="kicker">Pipeline</div>
+      <h2>처리 흐름은 다섯 단계로 고정한다</h2>
+      <div class="flow">
+        <div class="node"><b>TCP Server</b><small>accept loop, client session, byte chunk</small></div>
+        <div class="node"><b>Stream Buffer</b><small>partial command, partial multibyte text</small></div>
+        <div class="node"><b>ESC/POS Parser</b><small>ESC, GS, FS, DLE command state machine</small></div>
+        <div class="node"><b>Receipt Builder</b><small>line, style, alignment, image, cut event</small></div>
+        <div class="node"><b>Receipt UI</b><small>list, detail, scroll, debug log</small></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide" data-page="04 / 10">
+    <div>
+      <div class="kicker">Parser Decision</div>
+      <h2>파서는 상태 머신이어야 한다</h2>
+      <div class="grid three">
+        <div class="panel">
+          <strong>TCP는 경계가 없다</strong>
+          <span>명령어가 chunk 중간에서 끊긴다. <code>ESC a n</code>의 <code>n</code>이 다음 read에 올 수 있다.</span>
+        </div>
+        <div class="panel">
+          <strong>텍스트도 끊긴다</strong>
+          <span>UTF-8 또는 CP949 같은 멀티바이트 문자는 바이트 일부만 먼저 도착할 수 있다.</span>
+        </div>
+        <div class="panel">
+          <strong>명령이 다양하다</strong>
+          <span>Epson 명령 목록은 문자, 위치, 컷, 이미지, 바코드, 2D 코드 등으로 넓다. 알 수 없는 명령은 경고로 복구한다.</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide" data-page="05 / 10">
+    <div>
+      <div class="kicker">MVP Command Set</div>
+      <h2>1차 버전은 텍스트 영수증을 정확히 표시하는 데 집중한다</h2>
+      <table class="table">
+        <thead>
+          <tr><th>명령</th><th>역할</th><th>앱 처리</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>ESC @</code></td><td>초기화</td><td>스타일, 정렬, 코드페이지 기본값 복원</td></tr>
+          <tr><td><code>LF</code>, <code>CR</code></td><td>줄 처리</td><td>현재 라인을 확정하거나 옵션에 따라 무시</td></tr>
+          <tr><td><code>ESC a n</code></td><td>정렬</td><td>left, center, right 상태 변경</td></tr>
+          <tr><td><code>ESC E n</code>, <code>ESC - n</code></td><td>굵게/밑줄</td><td>TextSegment 스타일에 반영</td></tr>
+          <tr><td><code>GS ! n</code></td><td>문자 크기</td><td>폭/높이 배율에 매핑</td></tr>
+          <tr><td><code>GS V</code></td><td>용지 컷</td><td>현재 영수증 완료 이벤트</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="slide" data-page="06 / 10">
+    <div>
+      <div class="kicker">Native Android</div>
+      <h2>네이티브 구현은 서버 앱 성격에 가장 잘 맞는다</h2>
+      <div class="grid two">
+        <div class="panel">
+          <strong>권장 스택</strong>
+          <ul>
+            <li>Kotlin, Coroutines, Flow</li>
+            <li>Foreground Service</li>
+            <li>Jetpack Compose</li>
+            <li>Room 또는 DataStore</li>
+            <li>순수 Kotlin ESC/POS parser</li>
+          </ul>
+        </div>
+        <div class="panel">
+          <strong>장점</strong>
+          <ul>
+            <li>TCP 수신과 백그라운드 유지가 안정적</li>
+            <li>파서 단위 테스트가 쉽다</li>
+            <li>Bridge 비용이 없다</li>
+            <li>장시간 켜두는 POS 보조 앱에 적합</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide" data-page="07 / 10">
+    <div>
+      <div class="kicker">React Native</div>
+      <h2>React Native는 UI 생산성이 장점이지만, 서버 코어는 Native에 둔다</h2>
+      <div class="grid three">
+        <div class="panel">
+          <strong>JS 영역</strong>
+          <span>영수증 목록, 상세 화면, 설정, 검색/필터, 상태 관리</span>
+        </div>
+        <div class="panel">
+          <strong>Native 영역</strong>
+          <span>TCP 서버, Foreground Service, ESC/POS 파서, 영수증 완료 감지</span>
+        </div>
+        <div class="panel">
+          <strong>Module API</strong>
+          <span><code>start(port)</code>, <code>stop()</code>, <code>getStatus()</code>, <code>receiptCompleted</code> 이벤트</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide" data-page="08 / 10">
+    <div>
+      <div class="kicker">Comparison</div>
+      <h2>선택 기준은 UI보다 런타임 안정성이다</h2>
+      <table class="table">
+        <thead>
+          <tr><th>항목</th><th>Native Android</th><th>React Native</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>TCP 서버</td><td>직접 구현, 구조 단순</td><td>Native Module 필요</td></tr>
+          <tr><td>백그라운드 수신</td><td>Foreground Service와 자연스럽게 결합</td><td>Service는 Native 쪽 구현 필요</td></tr>
+          <tr><td>파서 성능</td><td>높음</td><td>Native 파서면 높음, JS 파서면 리스크</td></tr>
+          <tr><td>UI 생산성</td><td>Compose 숙련도 필요</td><td>React 팀에 유리</td></tr>
+          <tr><td>권장</td><td><span class="badge green">1차 제품 기본안</span></td><td><span class="badge blue">React 자산이 강할 때</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="slide" data-page="09 / 10">
+    <div>
+      <div class="kicker">Risks</div>
+      <h2>초기부터 막아야 할 리스크</h2>
+      <div class="grid four">
+        <div class="panel"><strong>부분 명령</strong><span>chunk 중간 분리를 테스트 케이스로 고정한다.</span></div>
+        <div class="panel"><strong>인코딩</strong><span>기본 UTF-8 외에 CP949/EUC-KR 옵션을 둔다.</span></div>
+        <div class="panel"><strong>제조사 확장</strong><span>UnknownCommand를 보존하고 원본 바이트를 추적한다.</span></div>
+        <div class="panel"><strong>Android 정책</strong><span>사용자 조작으로 서버 시작, FGS type/권한을 명시한다.</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide" data-page="10 / 10">
+    <div>
+      <div class="kicker">Recommendation</div>
+      <h2>최종 권장안: Kotlin Native 우선</h2>
+      <p>1차 제품은 Kotlin + Foreground Service + Jetpack Compose로 구현한다. React Native를 선택하더라도 TCP 서버와 ESC/POS 파서는 Android Native Module로 유지한다.</p>
+      <div style="margin-top: 34px">
+        <span class="badge green">Parser as pure core</span>
+        <span class="badge yellow">Cut + timeout completion</span>
+        <span class="badge blue">Scrollable receipt store</span>
+        <span class="badge red">Unknown command as warning</span>
+      </div>
+      <p class="source">
+        Sources:
+        <a href="https://download4.epson.biz/sec_pubs/pos/reference_en/escpos/commands.html">Epson ESC/POS Command Reference</a>,
+        <a href="https://developer.android.com/develop/background-work/services/fgs">Android Foreground Services</a>,
+        <a href="https://developer.android.com/about/versions/14/changes/fgs-types-required">Android 14 FGS Types</a>,
+        <a href="https://reactnative.dev/docs/turbo-native-modules-introduction">React Native Turbo Native Modules</a>
+      </p>
+    </div>
+  </section>
+</body>
+</html>

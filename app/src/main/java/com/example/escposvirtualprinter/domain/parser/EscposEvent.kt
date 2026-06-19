@@ -1,0 +1,16 @@
+package com.example.escposvirtualprinter.domain.parser
+
+import com.example.escposvirtualprinter.domain.model.TextAlign
+import com.example.escposvirtualprinter.domain.model.TextStyle
+
+sealed interface EscposEvent {
+    data class Text(val value: String, val style: TextStyle, val align: TextAlign) : EscposEvent
+    data object LineFeed : EscposEvent
+    data class SetAlign(val align: TextAlign) : EscposEvent
+    data class SetStyle(val style: TextStyle) : EscposEvent
+    data object Initialize : EscposEvent
+    data object Cut : EscposEvent
+    data class FeedLines(val count: Int) : EscposEvent
+    data class StatusRequest(val value: Int) : EscposEvent
+    data class UnknownCommand(val bytes: List<Int>, val offset: Long) : EscposEvent
+}

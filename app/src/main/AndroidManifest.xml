@@ -13,7 +13,7 @@
         android:supportsRtl="true"
         android:theme="@style/AppTheme">
         <activity
-            android:name=".adapter.inbound.ui.MainActivity"
+            android:name=".features.printer.adapter.inbound.ui.MainActivity"
             android:exported="true"
             android:theme="@style/AppTheme">
             <intent-filter>
@@ -23,7 +23,7 @@
         </activity>
 
         <service
-            android:name=".adapter.inbound.service.PrinterForegroundService"
+            android:name=".features.printer.adapter.inbound.service.PrinterForegroundService"
             android:exported="false"
             android:foregroundServiceType="specialUse">
             <property

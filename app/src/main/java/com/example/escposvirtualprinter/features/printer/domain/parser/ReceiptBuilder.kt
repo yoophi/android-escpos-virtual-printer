@@ -43,7 +43,7 @@ class ReceiptBuilder(
                 currentAlign = event.align
                 lineSegments += TextSegment(event.value, event.style)
             }
-            EscposEvent.LineFeed -> commitLine()
+            EscposEvent.LineFeed -> commitLine(force = true)
             is EscposEvent.SetAlign -> currentAlign = event.align
             is EscposEvent.SetStyle -> currentStyle = event.style
             EscposEvent.Initialize -> {
